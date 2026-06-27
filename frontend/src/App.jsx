@@ -9,6 +9,7 @@ import VariablesPanel from './components/VariablesPanel';
 import StepControls from './components/StepControls';
 import ArrayVisualizer from './components/ArrayVisualizer';
 import ReturnValue from './components/ReturnValue';
+import AiInsightPanel from './components/AiInsightPanel';
 import './App.css';
 
 /**
@@ -50,11 +51,18 @@ export default function App() {
   } = useVisualizer();
 
   // --- Auto-play ---
-  const { isPlaying, speed, setSpeed, togglePlay } = useStepPlayer(
+  const { isPlaying, speed, setSpeed, togglePlay, pause } = useStepPlayer(
     totalSteps,
     stepTo,
     currentStepIndex
   );
+
+  // --- Manual Navigation Wrappers (Pause auto-play when used) ---
+  const handleStepPrev = useCallback(() => { pause(); stepPrev(); }, [pause, stepPrev]);
+  const handleStepNext = useCallback(() => { pause(); stepNext(); }, [pause, stepNext]);
+  const handleStepTo = useCallback((val) => { pause(); stepTo(val); }, [pause, stepTo]);
+  const handleStepFirst = useCallback(() => { pause(); stepFirst(); }, [pause, stepFirst]);
+  const handleStepLast = useCallback(() => { pause(); stepLast(); }, [pause, stepLast]);
 
   // --- Parse signature on code/method change ---
   useEffect(() => {
@@ -180,6 +188,7 @@ export default function App() {
             <CodeViewer
               sourceLines={traceData?.sourceLines || []}
               activeLine={currentStep?.lineNumber}
+              activeVariables={currentStep?.variables}
             />
           </div>
 
@@ -188,20 +197,27 @@ export default function App() {
             totalSteps={totalSteps}
             isPlaying={isPlaying}
             speed={speed}
-            onStepPrev={stepPrev}
-            onStepNext={stepNext}
-            onStepTo={stepTo}
-            onStepFirst={stepFirst}
-            onStepLast={stepLast}
+            onStepPrev={handleStepPrev}
+            onStepNext={handleStepNext}
+            onStepTo={handleStepTo}
+            onStepFirst={handleStepFirst}
+            onStepLast={handleStepLast}
             onTogglePlay={togglePlay}
             onSpeedChange={setSpeed}
           />
 
           <div className="app__viz-row">
-            <VariablesPanel
-              currentStep={currentStep}
-              previousStep={previousStep}
-            />
+            <div className="app__viz-col">
+              <VariablesPanel
+                currentStep={currentStep}
+                previousStep={previousStep}
+              />
+              <AiInsightPanel 
+                currentStep={currentStep} 
+                previousStep={previousStep}
+                sourceLines={traceData?.sourceLines || []}
+              />
+            </div>
             <div className="app__viz-col">
               <ArrayVisualizer
                 currentStep={currentStep}

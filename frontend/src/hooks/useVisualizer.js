@@ -53,12 +53,14 @@ export function useVisualizer() {
         return;
       }
 
+      const steps = data.steps || [];
       setTraceData({
-        steps: data.steps || [],
+        steps: steps,
         sourceLines: data.sourceLines || [],
         returnValue: data.returnValue,
         truncationWarning: data.errorPhase === 'trace-truncated' ? data.errorMessage : null,
       });
+      setCurrentStepIndex(Math.max(0, steps.length - 1));
     } catch (err) {
       setError({
         phase: 'network',

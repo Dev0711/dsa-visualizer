@@ -61,3 +61,19 @@
   z-index: 1;
   white-space: pre;
 }
+
+.code-viewer__inline-vars {
+  position: relative;
+  z-index: 1;
+  margin-left: var(--space-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  background-color: rgba(138, 92, 246, 0.15); /* light purple tint */
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  opacity: 0.8;
+  font-style: italic;
+  pointer-events: none;
+}

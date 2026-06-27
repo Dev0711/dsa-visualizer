@@ -134,38 +134,33 @@ public class JdiStepEngine {
                 if (!stepRequestInstalled && event instanceof com.sun.jdi.event.ThreadStartEvent threadStartEvent) {
                     ThreadReference startedThread = threadStartEvent.thread();
                     if (startedThread.name().equals("main")) {
-                        StepRequest stepRequest = erm.createStepRequest(
-                                startedThread,
-                                StepRequest.STEP_LINE,
-                                StepRequest.STEP_INTO);
-                        stepRequest.addClassExclusionFilter("java.*");
-                        stepRequest.addClassExclusionFilter("javax.*");
-                        stepRequest.addClassExclusionFilter("sun.*");
-                        stepRequest.addClassExclusionFilter("jdk.*");
-                        stepRequest.setSuspendPolicy(EventRequest.SUSPEND_ALL);
-                        stepRequest.enable();
+                        createStepRequest(erm, startedThread);
                         stepRequestInstalled = true;
                         threadStartRequest.disable();
                     }
                 }
 
                 if (event instanceof StepEvent stepEvent) {
+                    StepRequest req = (StepRequest) stepEvent.request();
+                    // Disable the request so invokeMethod doesn't trigger it
+                    req.disable();
+
                     try {
                         StepSnapshot snapshot = captureSnapshot(stepEvent, steps.size());
                         if (snapshot != null) {
                             steps.add(snapshot);
                         }
                     } catch (Exception captureError) {
-                        // A single bad frame (e.g. variable temporarily out
-                        // of scope at this exact line) shouldn't kill the
-                        // whole trace - skip this step's variable capture
-                        // but keep going.
+                        // skip
                     }
 
                     if (steps.size() >= MAX_STEPS) {
                         truncated = true;
                         break eventLoop;
                     }
+
+                    // Re-enable the request for the next step
+                    req.enable();
                 }
             }
 
@@ -182,6 +177,19 @@ public class JdiStepEngine {
         }
 
         return new TraceResult(steps, stdoutCapture.toString(), truncated);
+    }
+
+    private void createStepRequest(EventRequestManager erm, ThreadReference thread) {
+        StepRequest stepRequest = erm.createStepRequest(
+                thread,
+                StepRequest.STEP_LINE,
+                StepRequest.STEP_INTO);
+        stepRequest.addClassExclusionFilter("java.*");
+        stepRequest.addClassExclusionFilter("javax.*");
+        stepRequest.addClassExclusionFilter("sun.*");
+        stepRequest.addClassExclusionFilter("jdk.*");
+        stepRequest.setSuspendPolicy(EventRequest.SUSPEND_ALL);
+        stepRequest.enable();
     }
 
     private LaunchingConnector findLaunchingConnector() {

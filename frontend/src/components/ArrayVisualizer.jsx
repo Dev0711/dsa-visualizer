@@ -66,6 +66,29 @@ export default function ArrayVisualizer({ currentStep, previousStep }) {
                     <span className="array-visualizer__value">
                       {item === null ? 'null' : String(item)}
                     </span>
+                    
+                    {/* Index pointer indicators */}
+                    {(() => {
+                      const indexPointers = Object.entries(currentStep?.variables || {})
+                        .filter(([varName, varVal]) => {
+                          const nameLower = varName.toLowerCase();
+                          const isIndexName = ['i', 'j', 'k', 'left', 'right', 'low', 'high', 'mid', 'idx', 'index', 'ptr', 'pointer', 'p'].includes(nameLower);
+                          return isIndexName && typeof varVal === 'number' && varVal === idx;
+                        })
+                        .map(([varName]) => varName);
+
+                      if (indexPointers.length === 0) return null;
+
+                      return (
+                        <div className="array-visualizer__pointers">
+                          {indexPointers.map(ptr => (
+                            <span key={ptr} className="array-visualizer__pointer-badge">
+                              ↑ {ptr}
+                            </span>
+                          ))}
+                        </div>
+                      );
+                    })()}
                   </motion.div>
                 );
               })}

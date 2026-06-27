@@ -39,22 +39,22 @@ export default function StepControls({
     <div className="step-controls glass-panel" id="step-controls">
       <div className="step-controls__buttons">
         <button
-          className="step-controls__btn"
+          className="step-controls__btn step-controls__btn--text"
           onClick={onStepFirst}
           disabled={currentStepIndex === 0}
-          title="First step"
-          aria-label="First step"
+          title="Restart from beginning"
+          aria-label="Restart"
         >
-          ⏮
+          ⏮ Restart
         </button>
         <button
-          className="step-controls__btn"
+          className="step-controls__btn step-controls__btn--text"
           onClick={onStepPrev}
           disabled={currentStepIndex === 0}
-          title="Previous step"
+          title="Manual Step Previous"
           aria-label="Previous step"
         >
-          ◀
+          ◀ Prev
         </button>
         <button
           className="step-controls__btn step-controls__btn--play"
@@ -65,22 +65,13 @@ export default function StepControls({
           {isPlaying ? '⏸' : '▶'}
         </button>
         <button
-          className="step-controls__btn"
+          className="step-controls__btn step-controls__btn--text"
           onClick={onStepNext}
           disabled={currentStepIndex >= totalSteps - 1}
-          title="Next step"
+          title="Manual Step Next"
           aria-label="Next step"
         >
-          ▶
-        </button>
-        <button
-          className="step-controls__btn"
-          onClick={onStepLast}
-          disabled={currentStepIndex >= totalSteps - 1}
-          title="Last step"
-          aria-label="Last step"
-        >
-          ⏭
+          Next ▶
         </button>
       </div>
 
@@ -112,11 +103,11 @@ export default function StepControls({
           value={speed}
           onChange={(e) => onSpeedChange(Number(e.target.value))}
         >
-          <option value={1000}>0.5×</option>
-          <option value={500}>1×</option>
-          <option value={250}>2×</option>
-          <option value={100}>5×</option>
-          <option value={50}>10×</option>
+          <option value={3000}>Very Slow (3s)</option>
+          <option value={2000}>Slow (2s)</option>
+          <option value={1500}>Normal (1.5s)</option>
+          <option value={1000}>Fast (1s)</option>
+          <option value={500}>Very Fast (0.5s)</option>
         </select>
       </div>
     </div>

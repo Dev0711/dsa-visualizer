@@ -287,6 +287,8 @@ If collection rendering still misbehaves, that's the next thing to debug.
 - **Phase 2** — React frontend: CodeMirror 6 editor, animated array-box
   visualization, step controls with play/pause/speed, variable diff
   highlighting, dynamic arg inputs from parsed signature. ✅ Complete.
+- **Phase 2.5** — Rule-based AI Trace Narrator: right-sidebar mode switch
+  with Debugger / Teacher / Coach narration synced to the current step.
 - **Phase 3** — LinkedList + Tree support: real pointer-chasing through
   `.next` / `.left` / `.right` fields via JDI (not toString()), plus
   recursive layout computation for tree rendering.

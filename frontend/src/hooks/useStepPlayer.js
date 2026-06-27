@@ -13,7 +13,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
  */
 export function useStepPlayer(totalSteps, stepTo, currentStep) {
   const [isPlaying, setIsPlaying] = useState(false);
-  const [speed, setSpeed] = useState(500); // ms between steps
+  const [speed, setSpeed] = useState(1500); // ms between steps
   const lastStepTimeRef = useRef(0);
   const animFrameRef = useRef(null);
   const currentStepRef = useRef(currentStep);

@@ -89,12 +89,21 @@ public class JdiValueConverter {
         if (value instanceof ObjectReference obj) {
             String className = obj.referenceType().name();
 
-            if (thread != null && isSafeToInvokeToString(className)) {
-                String rendered = tryInvokeToString(obj, thread);
+            if (isBoxedPrimitive(className)) {
+                try {
+                    Value primitiveVal = obj.getValue(obj.referenceType().fieldByName("value"));
+                    return toJavaValue(primitiveVal, thread);
+                } catch (Exception e) {
+                    // fall through
+                }
+            }
+
+            if (thread != null && isSafeToExtract(className)) {
+                String rendered = extractCollectionString(obj, thread);
                 if (rendered != null) {
                     return rendered;
                 }
-                // fall through to placeholder if invocation failed for any reason
+                // fall through to placeholder if extraction failed
             }
 
             // Placeholder for custom user types (e.g. ListNode/TreeNode).
@@ -106,46 +115,88 @@ public class JdiValueConverter {
         return value.toString();
     }
 
-    /**
-     * Restricts toString() invocation to standard library types only - see
-     * the SAFETY BOUNDARY note in the class doc for why this matters.
-     */
-    private static boolean isSafeToInvokeToString(String fullyQualifiedClassName) {
-        return fullyQualifiedClassName.startsWith("java.util.")
-                || fullyQualifiedClassName.startsWith("java.lang.");
+    private static boolean isBoxedPrimitive(String className) {
+        return className.equals("java.lang.Integer")
+                || className.equals("java.lang.Long")
+                || className.equals("java.lang.Double")
+                || className.equals("java.lang.Float")
+                || className.equals("java.lang.Boolean")
+                || className.equals("java.lang.Byte")
+                || className.equals("java.lang.Short")
+                || className.equals("java.lang.Character");
     }
 
-    /**
-     * Invokes toString() on the live object in the debuggee and returns the
-     * resulting String, or null if anything went wrong (missing method,
-     * invocation exception, thread state issue) so the caller can fall back
-     * to the placeholder instead of failing the whole snapshot.
-     */
-    private static String tryInvokeToString(ObjectReference obj, ThreadReference thread) {
+    private static boolean isSafeToExtract(String className) {
+        return className.equals("java.util.ArrayList")
+                || className.equals("java.util.HashMap")
+                || className.equals("java.util.HashSet");
+    }
+
+    private static String extractCollectionString(ObjectReference obj, ThreadReference thread) {
+        String className = obj.referenceType().name();
         try {
-            List<Method> candidates = obj.referenceType().methodsByName("toString", "()Ljava/lang/String;");
-            if (candidates.isEmpty()) {
-                return null;
+            if (className.equals("java.util.ArrayList")) {
+                return extractArrayList(obj, thread);
+            } else if (className.equals("java.util.HashMap")) {
+                return extractHashMap(obj, thread);
+            } else if (className.equals("java.util.HashSet")) {
+                // HashSet just wraps a HashMap internally
+                ObjectReference map = (ObjectReference) obj.getValue(obj.referenceType().fieldByName("map"));
+                if (map != null) {
+                    return extractHashSet(map, thread);
+                }
             }
-            Method toStringMethod = candidates.get(0);
-
-            Value result = obj.invokeMethod(
-                    thread,
-                    toStringMethod,
-                    List.of(),
-                    ObjectReference.INVOKE_SINGLE_THREADED);
-
-            if (result instanceof StringReference strRef) {
-                return strRef.value();
-            }
+            // For other collections not explicitly supported yet, return placeholder
             return null;
-        } catch (Exception anyInvocationProblem) {
-            // Covers InvocationException, IncompatibleThreadStateException,
-            // InvalidTypeException, ClassNotLoadedException - all checked
-            // exceptions per the JDI spec. Any failure here just means we
-            // show the placeholder instead; it should never abort the trace.
+        } catch (Exception e) {
             return null;
         }
+    }
+
+    private static String extractArrayList(ObjectReference obj, ThreadReference thread) {
+        IntegerValue sizeVal = (IntegerValue) obj.getValue(obj.referenceType().fieldByName("size"));
+        int size = sizeVal.value();
+        ArrayReference elementData = (ArrayReference) obj.getValue(obj.referenceType().fieldByName("elementData"));
+        
+        List<String> elements = new ArrayList<>();
+        for (int i = 0; i < size; i++) {
+            Value val = elementData.getValue(i);
+            elements.add(String.valueOf(toJavaValue(val, thread)));
+        }
+        return "[" + String.join(", ", elements) + "]";
+    }
+
+    private static String extractHashMap(ObjectReference obj, ThreadReference thread) {
+        ArrayReference table = (ArrayReference) obj.getValue(obj.referenceType().fieldByName("table"));
+        if (table == null) return "{}";
+
+        List<String> entries = new ArrayList<>();
+        for (Value nodeVal : table.getValues()) {
+            ObjectReference node = (ObjectReference) nodeVal;
+            while (node != null) {
+                Value key = node.getValue(node.referenceType().fieldByName("key"));
+                Value value = node.getValue(node.referenceType().fieldByName("value"));
+                entries.add(toJavaValue(key, thread) + "=" + toJavaValue(value, thread));
+                node = (ObjectReference) node.getValue(node.referenceType().fieldByName("next"));
+            }
+        }
+        return "{" + String.join(", ", entries) + "}";
+    }
+
+    private static String extractHashSet(ObjectReference mapObj, ThreadReference thread) {
+        ArrayReference table = (ArrayReference) mapObj.getValue(mapObj.referenceType().fieldByName("table"));
+        if (table == null) return "[]";
+
+        List<String> entries = new ArrayList<>();
+        for (Value nodeVal : table.getValues()) {
+            ObjectReference node = (ObjectReference) nodeVal;
+            while (node != null) {
+                Value key = node.getValue(node.referenceType().fieldByName("key"));
+                entries.add(String.valueOf(toJavaValue(key, thread)));
+                node = (ObjectReference) node.getValue(node.referenceType().fieldByName("next"));
+            }
+        }
+        return "[" + String.join(", ", entries) + "]";
     }
 
     private static List<Object> arrayToList(ArrayReference arr, ThreadReference thread) {

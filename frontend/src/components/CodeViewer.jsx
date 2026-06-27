@@ -10,8 +10,9 @@ import './CodeViewer.css';
  *
  * @param {string[]} sourceLines     - the original code split by line
  * @param {number|null} activeLine   - 1-indexed line number to highlight
+ * @param {object|null} activeVariables - variables object from the current step
  */
-export default function CodeViewer({ sourceLines, activeLine }) {
+export default function CodeViewer({ sourceLines, activeLine, activeVariables }) {
   const lines = useMemo(() => {
     if (!sourceLines || sourceLines.length === 0) return [];
     return sourceLines.map((content, idx) => ({
@@ -51,6 +52,19 @@ export default function CodeViewer({ sourceLines, activeLine }) {
               )}
               <span className="code-viewer__line-number">{String(line.number).padStart(3, ' ')}</span>
               <span className="code-viewer__line-content">{line.content || ' '}</span>
+              
+              {isActive && activeVariables && Object.keys(activeVariables).length > 0 && (
+                <span className="code-viewer__inline-vars">
+                  {Object.entries(activeVariables)
+                    .map(([k, v]) => {
+                      let displayVal = Array.isArray(v) ? `[${v.join(', ')}]` : v;
+                      if (typeof displayVal === 'string' && displayVal.length > 40) {
+                        displayVal = displayVal.substring(0, 40) + '...';
+                      }
+                      return `${k}: ${displayVal}`;
+                    }).join('  |  ')}
+                </span>
+              )}
             </div>
           );
         })}

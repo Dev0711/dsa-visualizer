@@ -33,6 +33,14 @@
   background: var(--bg-glass);
 }
 
+.step-controls__btn--text {
+  width: auto;
+  padding: 0 var(--space-3);
+  font-family: var(--font-sans);
+  font-weight: 500;
+  gap: var(--space-1);
+}
+
 .step-controls__btn:disabled {
   opacity: 0.3;
   cursor: not-allowed;
