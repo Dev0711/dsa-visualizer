@@ -1,0 +1,15 @@
+.code-editor {
+  height: 100%;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.code-editor .cm-editor {
+  height: 100%;
+  background: var(--bg-input);
+  border-radius: var(--radius-md);
+}
+
+.code-editor .cm-editor.cm-focused {
+  outline: none;
+}

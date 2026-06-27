@@ -1,14 +1,15 @@
-# DSA Visualizer — Phase 1
+# DSA Visualizer
 
-A Spring Boot service that compiles a pasted LeetCode-style `Solution` class
-in memory, launches it as a real child JVM, attaches a debugger to it via
-JDI (Java Debug Interface — the same API IntelliJ/Eclipse use internally),
-and steps through it line by line, capturing local variable values at every
-step. The end goal (across later phases) is a synced code-highlight +
-animated data-structure visualizer for arrays, HashMap, LinkedList, Tree,
-and Graph — this repo is Phase 1: prove the compile→debug→trace pipeline
-works, surfaced through a plain REST endpoint + a no-framework HTML test
-page (React comes in Phase 2).
+A Spring Boot + React application that compiles a pasted LeetCode-style
+`Solution` class in memory, launches it as a real child JVM, attaches a
+debugger to it via JDI (Java Debug Interface — the same API IntelliJ/Eclipse
+use internally), and steps through it line by line, capturing local variable
+values at every step. The frontend renders this trace as a synced
+code-highlight + animated data-structure visualization with step-through
+controls, variable diff highlighting, and array box diagrams.
+
+**Current status:** Phase 1 (backend pipeline) and Phase 2 (React frontend)
+are complete. Phase 3/4 (LinkedList, Tree, Graph visualization) are next.
 
 **Run environment confirmed by the project owner:** JDK 17+ and Maven 3.8+
 already installed locally (Windows, paths like `D:\dsa-visualizer`).
@@ -71,26 +72,54 @@ automatically.
 
 ## Running it end to end
 
+### Backend (Spring Boot)
+
 ```bash
 cd dsa-visualizer
-export JDK_JAVA_OPTIONS="--add-modules jdk.jdi"
-mvn clean package
-java -jar target/dsa-visualizer.jar
+set JDK_JAVA_OPTIONS=--add-modules jdk.jdi
+mvn spring-boot:run
 ```
 
-Then open `src/main/resources/static/index.html` **directly in your
-browser** (double-click it — no dev server needed; CORS is wide open in
-`VisualizeController` for exactly this reason). It's pre-filled with a Two
-Sum example. Hit **"Compile & Trace"** and you should see the code panel
-highlight the current line, a live variables panel, Prev/Next stepping, and
-the final return value.
+### Frontend (React — Phase 2)
+
+```bash
+cd frontend
+npm install        # first time only
+npm run dev
+```
+
+Open **http://localhost:5173** in your browser. The Vite dev server
+automatically proxies `/api/*` requests to the Spring Boot backend at
+`:8080`. The app is pre-filled with a Two Sum example — hit **"Compile &
+Trace"** and you should see:
+- Code panel with animated line highlighting
+- Live variables panel with diff highlighting (changed values pulse green)
+- Array visualization with animated boxes
+- Step controls with play/pause, speed, and scrub slider
+- Return value display
+
+**Note:** The Phase 1 test page (`src/main/resources/static/index.html`)
+is still available as a fallback at `http://localhost:8080/index.html`
+if you just want to test the backend directly.
+
+### Frontend tech stack
+- **Vite** — dev server + build tool
+- **React 19** — UI framework
+- **CodeMirror 6** — Java syntax highlighting in the code editor
+- **Framer Motion** — smooth animations (line highlights, variable diffs,
+  array box transitions)
+- **Vanilla CSS** with CSS custom properties (design tokens) — no
+  Tailwind, no CSS-in-JS; all theming is via `index.css` tokens
 
 ---
 
 ## How a request flows through the code
 
-1. **`VisualizeController`** (`/api/visualize`) — receives
-   `{ solutionCode, methodName, args }` as JSON.
+1. **`VisualizeController`** — two endpoints:
+   - `POST /api/visualize` — full compile + trace pipeline
+   - `POST /api/parse-signature` — lightweight signature extraction for
+     dynamic frontend input generation
+   Both endpoints validate inputs at the controller level (fail fast).
 2. **`VisualizationService.visualize()`** — orchestrates everything below,
    wrapped in a try/finally that always cleans up the temp directory:
    - **`CodeWrapper.wrap()`** — keeps the pasted class **byte-for-byte**
@@ -220,10 +249,9 @@ If collection rendering still misbehaves, that's the next thing to debug.
   this actually already works, contrary to an earlier assumption). May
   need upgrading for generics in return types, annotations on the method,
   or multi-line parameter lists with complex generic bounds.
-- **The HTML test page hardcodes exactly two argument input boxes**
-  (`arg0`, `arg1`). A method needing 3+ parameters will need either manual
-  HTML edits or the Phase 2 React rewrite (which should generate input
-  fields dynamically from the parsed signature).
+- ~~**The HTML test page hardcodes exactly two argument input boxes**~~ —
+  Fixed in Phase 2. The React frontend dynamically generates input fields
+  from the parsed method signature via `/api/parse-signature`.
 - **5000-step / 15-second hard caps** (`JdiStepEngine.MAX_STEPS` /
   `SESSION_TIMEOUT_MS`) guard against accidentally pasted infinite loops.
   Bump these constants if you need to trace something longer-running.
@@ -254,15 +282,11 @@ If collection rendering still misbehaves, that's the next thing to debug.
 
 ## Roadmap (matches what's been discussed and agreed)
 
-- **Phase 1 (this repo, current status: functioning end-to-end for
-  array/String/primitive problems using HashMap/HashSet/ArrayList)** — REST
-  + plain HTML test page. ✅ mostly done, modulo whatever the next test
-  session turns up.
-- **Phase 2** — React frontend: proper syntax-highlighted code view (e.g.
-  CodeMirror or `react-syntax-highlighter`), animated array-box
-  visualization synced to a step slider, dynamically generated input forms
-  from the parsed method signature (fixing the hardcoded-two-args
-  limitation above).
+- **Phase 1** — Backend pipeline: compile → debug → trace via JDI, REST
+  API, plain HTML test page. ✅ Complete.
+- **Phase 2** — React frontend: CodeMirror 6 editor, animated array-box
+  visualization, step controls with play/pause/speed, variable diff
+  highlighting, dynamic arg inputs from parsed signature. ✅ Complete.
 - **Phase 3** — LinkedList + Tree support: real pointer-chasing through
   `.next` / `.left` / `.right` fields via JDI (not toString()), plus
   recursive layout computation for tree rendering.
