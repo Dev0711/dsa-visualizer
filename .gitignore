@@ -1,0 +1,33 @@
+# === Java / Maven ===
+target/
+*.class
+*.jar
+*.war
+*.ear
+
+# === IDE ===
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# === OS ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Temp / Build ===
+*.log
+*.tmp
+dsa-viz-*/
+
+# === Frontend (will be added in Phase 2) ===
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+frontend/.env.*.local

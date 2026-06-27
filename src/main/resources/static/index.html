@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DSA Visualizer — Phase 1 Test Page</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, sans-serif; margin: 0; padding: 20px; background: #1e1e1e; color: #ddd; }
+  h1 { font-size: 18px; color: #fff; }
+  .row { display: flex; gap: 16px; margin-top: 16px; }
+  .col { flex: 1; }
+  textarea, input { width: 100%; box-sizing: border-box; background: #2b2b2b; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 8px; font-family: 'Fira Code', monospace; font-size: 13px; }
+  textarea#code { height: 280px; }
+  label { display:block; margin-top: 10px; font-size: 12px; color: #999; }
+  button { margin-top: 14px; background: #3b82f6; color: white; border: none; padding: 10px 18px; border-radius: 4px; cursor: pointer; font-size: 14px; }
+  button:hover { background: #2563eb; }
+  button:disabled { background: #555; cursor: not-allowed; }
+  #status { margin-top: 10px; font-size: 13px; color: #f59e0b; }
+  #codePane { background: #111; border-radius: 6px; padding: 12px; font-family: monospace; font-size: 13px; white-space: pre; overflow-x: auto; max-height: 400px; overflow-y: auto; }
+  .lineHighlight { background: #3b4a2f; display: block; }
+  #varsPane { background: #111; border-radius: 6px; padding: 12px; font-family: monospace; font-size: 13px; min-height: 150px; }
+  .varRow { margin-bottom: 6px; }
+  .varName { color: #60a5fa; }
+  .varVal { color: #fbbf24; }
+  #controls { margin-top: 12px; display:flex; align-items:center; gap: 10px; }
+  #stepLabel { font-size: 13px; color: #aaa; }
+  #result { margin-top: 10px; font-size: 13px; color: #4ade80; }
+  .argInput { margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<h1>DSA Visualizer — Phase 1 Test Page</h1>
+
+<div class="row">
+  <div class="col">
+    <label>Solution code (paste your LeetCode-style class, no main() needed)</label>
+    <textarea id="code">class Solution {
+    public int[] twoSum(int[] nums, int target) {
+        java.util.Map<Integer, Integer> seen = new java.util.HashMap<>();
+        for (int i = 0; i < nums.length; i++) {
+            int complement = target - nums[i];
+            if (seen.containsKey(complement)) {
+                return new int[]{seen.get(complement), i};
+            }
+            seen.put(nums[i], i);
+        }
+        return new int[]{};
+    }
+}</textarea>
+
+    <label>Method name to trace</label>
+    <input id="methodName" value="twoSum">
+
+    <label>Arguments (in order, one per line — matches the parameter list)</label>
+    <input class="argInput" id="arg0" placeholder="nums, e.g. 2,7,11,15" value="2,7,11,15">
+    <input class="argInput" id="arg1" placeholder="target, e.g. 9" value="9">
+
+    <button id="runBtn" onclick="runVisualize()">▶ Compile &amp; Trace</button>
+    <div id="status"></div>
+    <div id="result"></div>
+  </div>
+
+  <div class="col">
+    <label>Code (current line highlighted)</label>
+    <div id="codePane"></div>
+
+    <label>Variables at this step</label>
+    <div id="varsPane">Run a trace to see variable states here.</div>
+
+    <div id="controls" style="display:none;">
+      <button onclick="stepPrev()">⏮ Prev</button>
+      <button onclick="stepNext()">Next ⏭</button>
+      <span id="stepLabel"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentSteps = [];
+let currentStepIndex = 0;
+let sourceLines = [];
+
+async function runVisualize() {
+  const code = document.getElementById('code').value;
+  const methodName = document.getElementById('methodName').value.trim();
+  const arg0 = document.getElementById('arg0').value;
+  const arg1 = document.getElementById('arg1').value;
+
+  const args = [];
+  if (arg0 !== '') args.push(arg0);
+  if (arg1 !== '') args.push(arg1);
+
+  const statusEl = document.getElementById('status');
+  const resultEl = document.getElementById('result');
+  const runBtn = document.getElementById('runBtn');
+
+  statusEl.textContent = 'Compiling and tracing... (this launches a real child JVM, give it a couple seconds)';
+  resultEl.textContent = '';
+  runBtn.disabled = true;
+
+  try {
+    const res = await fetch('http://localhost:8080/api/visualize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ solutionCode: code, methodName: methodName, args: args })
+    });
+    const data = await res.json();
+
+    if (!data.success) {
+      statusEl.textContent = `Error [${data.errorPhase}]: ${data.errorMessage}`;
+      document.getElementById('controls').style.display = 'none';
+      if (data.generatedSource) {
+        document.getElementById('codePane').textContent = data.generatedSource;
+        document.getElementById('varsPane').innerHTML =
+          '(This is the exact generated source that failed to compile — ' +
+          'your pasted code plus the auto-generated Main class appended below it.)';
+      }
+      return;
+    }
+
+    statusEl.textContent = data.errorMessage ? data.errorMessage : '';
+    currentSteps = data.steps;
+    sourceLines = data.sourceLines;
+    currentStepIndex = 0;
+
+    resultEl.textContent = 'Return value: ' + JSON.stringify(data.returnValue);
+
+    document.getElementById('controls').style.display = currentSteps.length ? 'flex' : 'none';
+    renderStep();
+
+  } catch (e) {
+    statusEl.textContent = 'Request failed: ' + e.message + ' (is the Spring Boot service running on :8080?)';
+  } finally {
+    runBtn.disabled = false;
+  }
+}
+
+function renderStep() {
+  if (currentSteps.length === 0) {
+    document.getElementById('codePane').textContent = '(no steps captured)';
+    return;
+  }
+  const step = currentSteps[currentStepIndex];
+
+  const codePane = document.getElementById('codePane');
+  codePane.innerHTML = sourceLines.map((line, idx) => {
+    const lineNum = idx + 1;
+    const isCurrent = lineNum === step.lineNumber;
+    const escaped = line.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    return `<span class="${isCurrent ? 'lineHighlight' : ''}">${String(lineNum).padStart(3,' ')}  ${escaped}</span>`;
+  }).join('\n');
+
+  const varsPane = document.getElementById('varsPane');
+  const entries = Object.entries(step.variables || {});
+  varsPane.innerHTML = entries.length
+    ? entries.map(([k, v]) => `<div class="varRow"><span class="varName">${k}</span> = <span class="varVal">${JSON.stringify(v)}</span></div>`).join('')
+    : '(no local variables in scope at this line)';
+
+  document.getElementById('stepLabel').textContent =
+    `Step ${currentStepIndex + 1} / ${currentSteps.length}  (line ${step.lineNumber}, method ${step.methodName})`;
+}
+
+function stepNext() {
+  if (currentStepIndex < currentSteps.length - 1) {
+    currentStepIndex++;
+    renderStep();
+  }
+}
+
+function stepPrev() {
+  if (currentStepIndex > 0) {
+    currentStepIndex--;
+    renderStep();
+  }
+}
+</script>
+
+</body>
+</html>
