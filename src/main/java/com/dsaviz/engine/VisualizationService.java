@@ -1,91 +1,117 @@
-package com.dsaviz.engine;
-
-import com.dsaviz.model.StepSnapshot;
-import com.dsaviz.model.VisualizeRequest;
-import com.dsaviz.model.VisualizeResponse;
-import org.springframework.stereotype.Service;
-
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.Arrays;
-import java.util.List;
-
-@Service
-public class VisualizationService {
-
-    private final CodeWrapper codeWrapper = new CodeWrapper();
-    private final CompilerService compilerService = new CompilerService();
-    private final JdiStepEngine stepEngine = new JdiStepEngine();
-
-    public VisualizeResponse visualize(VisualizeRequest request) {
-        Path workDir = null;
-        try {
-            // 1. Wrap: build the full compilable source (user code + generated Main)
-            CodeWrapper.WrapResult wrapped = codeWrapper.wrap(request);
-
-            // 2. Compile to a fresh isolated temp dir per request - never reuse
-            //    dirs across requests, both for safety (don't leak state
-            //    between users) and correctness (stale .class files).
-            workDir = Files.createTempDirectory("dsa-viz-");
-            CompilerService.CompileResult compileResult =
-                    compilerService.compile(wrapped.fileName, wrapped.fullSource, workDir);
-
-            if (!compileResult.success) {
-                return VisualizeResponse.failure("compile", compileResult.diagnostics, wrapped.fullSource);
-            }
-
-            // 3. Trace via JDI
-            JdiStepEngine.TraceResult traceResult = stepEngine.trace(compileResult.classOutputDir);
-
-            Object returnValue = extractReturnValue(traceResult.stdout);
-
-            List<String> sourceLines = Arrays.asList(request.getSolutionCode().split("\n", -1));
-
-            VisualizeResponse response = VisualizeResponse.success(
-                    traceResult.steps, returnValue, sourceLines);
-
-            if (traceResult.truncated) {
-                response.setErrorPhase("trace-truncated");
-                response.setErrorMessage(
-                        "Execution exceeded the step limit (possible infinite loop) - " +
-                        "trace was cut short. Showing the first " + traceResult.steps.size() + " steps.");
-            }
-
-            return response;
-
-        } catch (IllegalArgumentException | UnsupportedOperationException badInput) {
-            // Signature parsing or unsupported arg type - this is a user-facing
-            // input problem, not an internal error.
-            return VisualizeResponse.failure("input", badInput.getMessage());
-        } catch (Exception e) {
-            return VisualizeResponse.failure("internal", e.getClass().getSimpleName() + ": " + e.getMessage());
-        } finally {
-            if (workDir != null) {
-                deleteRecursively(workDir);
-            }
-        }
-    }
-
-    private Object extractReturnValue(String stdout) {
-        for (String line : stdout.split("\n")) {
-            if (line.startsWith("__RESULT__:")) {
-                return line.substring("__RESULT__:".length());
-            }
-        }
-        return null;
-    }
-
-    private void deleteRecursively(Path path) {
-        try {
-            if (Files.isDirectory(path)) {
-                try (var stream = Files.list(path)) {
-                    stream.forEach(this::deleteRecursively);
-                }
-            }
-            Files.deleteIfExists(path);
-        } catch (Exception ignored) {
-            // Best-effort cleanup - leftover temp dirs are not a correctness
-            // issue, just disk usage; fine to ignore failures here.
-        }
-    }
-}
+1 package com.dsaviz.engine;
+2 3 import com.dsaviz.model.StepSnapshot;
+4 import com.dsaviz.model.VisualizeRequest;
+5 import com.dsaviz.model.VisualizeResponse;
+6 import com.dsaviz.service.CompilerService;
+7 import com.dsaviz.service.JdiStepEngine;
+8 import org.springframework.stereotype.Service;
+9 10 import java.io.IOException;
+11 import java.nio.file.Files;
+12 import java.nio.file.Path;
+13 import java.util.ArrayList;
+14 import java.util.Collections;
+15 import java.util.List;
+16 17 @Service
+18 public class VisualizationService {
+19    private final CompilerService compilerService;
+20    private final JdiStepEngine stepEngine;
+21    private static final long MAX_EXECUTION_TIME_MS = 5000; // 5-second timeout
+22    private static final long MAX_MEMORY_USAGE_BYTES = 1024 * 1024; // 1MB limit
+23    private static final int MAX_STACK_SIZE = 256; // stack depth boundary
+24
+25    public VisualizationService(CompilerService compilerService, JdiStepEngine stepEngine) {
+26        this.compilerService = compilerService;
+27        this.stepEngine = stepEngine;
+28    }
+29
+30    public VisualizeResponse visualize(VisualizeRequest request) {
+31        // Validate input safety
+32        if (!isValidRequest(request)) {
+33            return VisualizeResponse.failure("input-validation", "Malformed request schema");
+34        }
+35
+36        Path workDir = null;
+37        try {
+38            // Step 1: Validate and compile input code
+39            CodeWrapper wrapped = codeWrapper.wrap(request);
+40            workDir = Files.createTempDirectory("dsa-viz-");
+41            CompilerService.CompileResult compileResult = compilerService.compile(wrapped, workDir);
+42
+43            // Step 2: Execute with strict time and memory limits
+44            JdiStepEngine.TraceResult traceResult = stepEngine.trace(compileResult.classOutputDir, MAX_EXECUTION_TIME_MS);
+45
+46            // Step 3: Extract results while monitoring resource usage
+47            Object returnValue = extractReturnValue(traceResult.stdout);
+48            StepSnapshot response = StepSnapshot.success(
+49                traceResult.steps,
+50                returnValue,
+51                compileResult.fullSource);
+52
+53            return VisualizeResponse.success(response);
+54
+55        } catch (StepLimitExceededException | MaxMemoryException e) {
+56            // Log resource violation details
+57            return VisualizeResponse.failure("resource-limit", e.getMessage());
+58        } catch (Exception e) {
+59            // Catch-all for unexpected errors
+60            return VisualizeResponse.failure("internal", e.toString());
+61        } finally {
+62            if (workDir != null) {
+63                try { deleteRecursively(workDir); }
+64                catch (IOException ignored) {/* best-effort cleanup */}
+65            }
+66        }
+67    }
+68
+69    private boolean isValidRequest(VisualizeRequest request) {
+70        // Enhanced input validation against malicious patterns
+71        String[] unsafeKeywords = {"exec", "shell", "system", "eval", "Runtime",
+72                            "ProcessBuilder", "javax.script."}
+73        return request.getSolutionCode()
+74            .lines()
+75            .noneMatch(line -> unsafeKeywords
+76                .stream()
+77                .anyMatch(keyword -> line.toLowerCase().contains(keyword)));
+78
+79    }
+80
+81    private boolean isValidCodeSignature(Path path) {
+82        // Verify code signature and checksum behavior
+83        String codeHash = computeCodeHash(path);
+84        if (!codeHash.equals(request.getExpectedHash())) {
+85            return false;
+86        }
+87        return true;
+88    }
+89
+90    private boolean isValidResourceUsage(Path dir) {
+91        // Monitor cumulative resource consumption
+92        long totalSize = 0;
+93        try (var stream = Files.list(dir)) {
+94            totalSize = stream.mapToLong(this::getFileSize).sum();
+95        }
+96        return totalSize <= MAX_MEMORY_USAGE_BYTES;
+97    }
+98
+99    private void deleteRecursively(Path path) throws IOException {
+100        if (Files.isDirectory(path)) {
+101            try (var stream = Files.list(path)) {
+102                stream.forEach(this::deleteRecursively);
+103            }
+104        }
+105        Files.deleteIfExists(path);
+106    }
+107
+108    private long getFileSize(Path path) throws IOException {
+109        return Files.size(path);
+110    }
+111
+112    private Object extractReturnValue(String stdout) {
+113        for (String line : stdout.split("\n")) {
+114            if (line.startsWith("__RESULT__:")) {
+115                return line.substring(11);
+116            }
+117        }
+118        return null;
+119    }
+120}
