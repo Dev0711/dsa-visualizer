@@ -8,11 +8,21 @@
  *   - Add request/response interceptors
  *   - Mock the API for testing
  *
- * In dev: Vite's proxy forwards /api → http://localhost:8080
- * In prod: same-origin, no proxy needed
+ * URL resolution strategy:
+ *   - Dev:  VITE_API_BASE_URL is not set → falls back to '/api'
+ *           Vite's dev server proxy forwards /api → http://localhost:8080
+ *   - Prod: VITE_API_BASE_URL=https://your-backend.onrender.com (set in
+ *           Vercel dashboard as an env var) → calls backend directly
+ *
+ * To set for production:
+ *   In Vercel dashboard → Project → Settings → Environment Variables:
+ *     VITE_API_BASE_URL = https://your-dsa-visualizer-backend.onrender.com
  */
 
-const API_BASE = '/api';
+const API_BASE = import.meta.env.VITE_API_BASE_URL
+  ? `${import.meta.env.VITE_API_BASE_URL}/api`
+  : '/api';
+
 
 /**
  * Generic fetch wrapper with consistent error handling.

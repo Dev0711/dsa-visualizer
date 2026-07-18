@@ -1,0 +1,28 @@
+# Ignore everything by default, then whitelist what the build needs.
+# This keeps the Docker build context small (no node_modules, target/, etc.)
+# which makes `docker build` and Render's CI cache significantly faster.
+
+# Ignore everything
+**
+
+# Allow: Maven build files
+!pom.xml
+!src/
+
+# Ignore Maven build output (we run mvn inside the container)
+src/main/resources/static/
+
+# Ignore IDE and OS files
+.idea/
+.vscode/
+.git/
+*.iml
+
+# Ignore frontend entirely (not needed for backend Docker image)
+frontend/
+
+# Ignore other docs/scripts
+README.md
+AGENTS.md
+run-backend.bat
+target/

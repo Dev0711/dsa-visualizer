@@ -62,9 +62,13 @@ export function useVisualizer() {
       });
       setCurrentStepIndex(Math.max(0, steps.length - 1));
     } catch (err) {
+      const isDev = import.meta.env.DEV;
+      const hint = isDev
+        ? ' Make sure the Spring Boot backend is running on localhost:8080.'
+        : ' The backend service may be starting up (first request can take ~60s on free hosting) — please try again.';
       setError({
         phase: 'network',
-        message: `Failed to reach the backend: ${err.message}. Is the Spring Boot service running on :8080?`,
+        message: `Could not reach the backend: ${err.message}.${hint}`,
       });
     } finally {
       setIsLoading(false);

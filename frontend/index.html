@@ -2,15 +2,40 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+
+    <!-- Favicon: use the ⚡ emoji as an SVG data-URI — no extra file needed -->
+    <link rel="icon" type="image/svg+xml"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>" />
+
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="DSA Visualizer — paste Java code, see it execute step-by-step with animated data structure visualizations" />
+    <meta name="theme-color" content="#6366f1" />
+
+    <!-- SEO -->
+    <meta name="description"
+      content="DSA Visualizer — paste a LeetCode-style Java Solution class and watch it execute step by step with live variable tracking and animated data-structure visualization." />
+    <meta name="keywords"
+      content="DSA, data structures, algorithms, Java, LeetCode, visualizer, debugger, step-through" />
+
+    <!-- Open Graph (link previews in Slack, Discord, Twitter, etc.) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="DSA Visualizer" />
+    <meta property="og:description"
+      content="Paste Java code. Watch it execute. Step through every line with live variable and array visualization." />
+    <meta property="og:image" content="https://placehold.co/1200x630/6366f1/white?text=DSA+Visualizer" />
+
     <title>DSA Visualizer</title>
+
+    <!-- Fonts: Inter (UI) + JetBrains Mono (code) -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
+

@@ -30,7 +30,8 @@ import java.util.List;
  */
 @RestController
 @RequestMapping("/api")
-@CrossOrigin(origins = "*") // fine for local dev; tighten before any real deployment
+@CrossOrigin(origins = "*") // Global CORS policy is managed by CorsConfig.java;
+                              // this annotation handles per-method preflight fallback.
 public class VisualizeController {
 
     private final VisualizationService visualizationService;
