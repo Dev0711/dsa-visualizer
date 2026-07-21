@@ -73,8 +73,11 @@ public class JdiStepEngine {
 
         Map<String, Connector.Argument> arguments = connector.defaultArguments();
         arguments.get("main").setValue("Main");
-        // classpath for the launched child JVM must point at our compiled output dir
-        arguments.get("options").setValue("-cp " + classOutputDir.toAbsolutePath());
+        // classpath for the launched child JVM must point at our compiled output dir.
+        // -Djava.net.preferIPv4Stack=true prevents IPv4/IPv6 dual-stack mismatch on Linux/Alpine
+        // container environments during JDWP socket handshake.
+        arguments.get("options").setValue("-Djava.net.preferIPv4Stack=true -cp " + classOutputDir.toAbsolutePath());
+
 
         VirtualMachine vm = connector.launch(arguments);
 
