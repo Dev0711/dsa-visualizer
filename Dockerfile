@@ -43,5 +43,7 @@ EXPOSE 8080
 #                           Render's 512MB free tier container
 ENTRYPOINT ["java", \
   "--add-modules", "jdk.jdi", \
+  "-Djava.net.preferIPv4Stack=true", \
   "-XX:MaxRAMPercentage=75.0", \
   "-jar", "app.jar"]
+
