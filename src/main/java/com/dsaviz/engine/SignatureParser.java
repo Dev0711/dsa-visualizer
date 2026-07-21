@@ -20,15 +20,19 @@ public class SignatureParser {
 
     // Matches: [modifiers] returnType methodName ( paramList ) {
     // Captures: group(1)=returnType  group(2)=methodName  group(3)=paramList
+    // Restricts return type characters to letters, digits, generic braces, arrays, comma, packages, and horizontal whitespace [ \t]
+    // to prevent matching across newlines.
     private static final Pattern METHOD_PATTERN = Pattern.compile(
             "(?:public|private|protected)?\\s*(?:static\\s+)?" +
-            "([A-Za-z_][A-Za-z0-9_<>\\[\\],\\s]*?)\\s+" +   // return type (non-greedy)
+            "([A-Za-z_][A-Za-z0-9_<>\\[\\],\\.[ \\t]]*?)\\s+" +   // return type (non-greedy, no newlines)
             "(\\w+)\\s*" +                                    // method name
             "\\(([^)]*)\\)\\s*\\{"                            // ( params ) {
     );
 
     public static ParsedSignature extractMethodSignature(String sourceCode, String methodName) {
-        Matcher m = METHOD_PATTERN.matcher(sourceCode);
+        String cleanCode = stripComments(sourceCode);
+        Matcher m = METHOD_PATTERN.matcher(cleanCode);
+
 
         while (m.find()) {
             String foundName = m.group(2);
@@ -113,4 +117,30 @@ public class SignatureParser {
         }
         return result;
     }
+
+    /**
+     * Strips single-line and multi-line comments from the source code.
+     * This ensures the signature parser regex never accidentally matches
+     * comment blocks as part of the return type.
+     */
+    private static String stripComments(String code) {
+        if (code == null) return "";
+        // Strip multi-line comments
+        String noMulti = code.replaceAll("/\\*(?s).*?\\*/", "");
+        // Strip single-line comments line-by-line
+        StringBuilder sb = new StringBuilder();
+        for (String line : noMulti.split("\n", -1)) {
+            int commentIdx = line.indexOf("//");
+            if (commentIdx >= 0) {
+                sb.append(line.substring(0, commentIdx)).append("\n");
+            } else {
+                sb.append(line).append("\n");
+            }
+        }
+        if (!code.endsWith("\n") && sb.length() > 0) {
+            sb.setLength(sb.length() - 1);
+        }
+        return sb.toString();
+    }
 }
+
