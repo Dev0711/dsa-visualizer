@@ -3,11 +3,14 @@
 #
 # Two-stage build:
 #   Stage 1: Maven build (produces the fat jar)
-#   Stage 2: Runtime — uses full JDK 17 (NOT jre-only) because:
-#     • JdiStepEngine needs `javac` to compile user code
-#     • JdiStepEngine needs to spawn a child `java` process
-#       via JDI's CommandLineLaunch connector
-#     • The jdk.jdi module is only in a full JDK
+#   Stage 2: Runtime
+#
+# We still need a full JDK (not just a JRE) at runtime because:
+#   • CompilerService uses javax.tools.JavaCompiler (javac)
+#     to compile user-submitted code in memory.
+#   • InstrumentedRunner spawns a child `java` process to run it.
+# We do NOT need jdk.jdi / JDWP any more — tracing is done via
+# source instrumentation (JavaParser), not a debugger attachment.
 # ============================================================
 
 # ---- Stage 1: Build ----------------------------------------
@@ -15,35 +18,28 @@ FROM maven:3.9.6-eclipse-temurin-17-alpine AS build
 
 WORKDIR /app
 
-# Copy pom first so Docker layer-caches the dependency download
-# separately from the source code — rebuilds are much faster.
+# Cache the dependency download layer separately from source code
 COPY pom.xml .
 RUN mvn dependency:go-offline -q
 
-# Now copy source and build
 COPY src ./src
 RUN mvn clean package -DskipTests -q
 
 # ---- Stage 2: Runtime --------------------------------------
-# Must use full JDK (not eclipse-temurin:17-jre-alpine) because
-# the app needs javac + jdk.jdi at runtime, not just java.
+# Full JDK required for javac (CompilerService) and child java
+# process (InstrumentedRunner). JRE-only images are not enough.
 FROM eclipse-temurin:17-jdk-alpine
 
 WORKDIR /app
 
-# Copy the fat jar from the build stage
 COPY --from=build /app/target/dsa-visualizer.jar app.jar
 
 # Render injects $PORT at runtime; Spring Boot reads server.port=${PORT:8080}
 EXPOSE 8080
 
-# --add-modules jdk.jdi  — required; without this, JdiStepEngine throws
-#                           ClassNotFoundException for com.sun.jdi.*
-# -XX:MaxRAMPercentage=75 — prevents the JVM from over-claiming RAM on
-#                           Render's 512MB free tier container
+# -XX:MaxRAMPercentage=75 — prevent the JVM from over-claiming RAM on
+# Render's 512MB free-tier container.
+# No --add-modules jdk.jdi needed any more.
 ENTRYPOINT ["java", \
-  "--add-modules", "jdk.jdi", \
-  "-Djava.net.preferIPv4Stack=true", \
   "-XX:MaxRAMPercentage=75.0", \
   "-jar", "app.jar"]
-
