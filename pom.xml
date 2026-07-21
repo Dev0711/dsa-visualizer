@@ -15,7 +15,7 @@
     <artifactId>dsa-visualizer</artifactId>
     <version>0.1.0</version>
     <name>dsa-visualizer</name>
-    <description>JDI-powered step-by-step Java DSA code visualizer (Phase 1)</description>
+    <description>Source-instrumentation-powered step-by-step Java DSA code visualizer</description>
 
     <properties>
         <java.version>17</java.version>
@@ -34,6 +34,15 @@
             <artifactId>jackson-databind</artifactId>
         </dependency>
 
+        <!-- JavaParser: used by CodeInstrumentor to parse and transform the user's
+             Solution source, injecting __DSAVizTrace.step() calls before each
+             statement so we capture exact line/variable state without JDI/JDWP. -->
+        <dependency>
+            <groupId>com.github.javaparser</groupId>
+            <artifactId>javaparser-core</artifactId>
+            <version>3.25.8</version>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -47,9 +56,8 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
-                <configuration>
-                    <jvmArguments>--add-modules jdk.jdi</jvmArguments>
-                </configuration>
+                <!-- No special jvmArguments needed: source instrumentation replaces
+                     JDI/JDWP entirely, so the add-modules jdk.jdi flag is gone. -->
             </plugin>
         </plugins>
     </build>

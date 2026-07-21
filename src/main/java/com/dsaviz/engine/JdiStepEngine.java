@@ -25,52 +25,62 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.net.ServerSocket;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Drives a debuggee JVM via JDI, using ProcessBuilder + SocketAttach.
  *
- * <p>Why not CommandLineLaunch?
+ * <h3>Why not CommandLineLaunch?</h3>
  * CommandLineLaunch is JDI's built-in "start the child and connect" connector.
- * In practice it is unreliable in Linux/Alpine/Docker containers because:
- *   - It uses an internal mechanism to pick an ephemeral port and pass it to
- *     the child JVM.  On dual-stack Linux systems (where "localhost" resolves
- *     to both ::1 and 127.0.0.1), the parent and child can end up on different
- *     IP families, causing: IOException: handshake failed - unrecognized message
- *     from target VM.
- *   - JDK_JAVA_OPTIONS / JAVA_TOOL_OPTIONS env vars cause the child to print
- *     "Picked up JDK_JAVA_OPTIONS: ..." before the JDWP handshake string, which
- *     corrupts the transport stream in some JDI implementations.
+ * It is unreliable inside Linux/Alpine/Docker containers because:
+ * <ul>
+ *   <li>On dual-stack Linux hosts, "localhost" can resolve to ::1 (IPv6) for the
+ *       parent but 127.0.0.1 (IPv4) for the child's JDWP agent — causing
+ *       "handshake failed - unrecognized message from target VM".</li>
+ *   <li>JDK_JAVA_OPTIONS / JAVA_TOOL_OPTIONS env vars can inject extra output
+ *       before the JDWP handshake text, corrupting the transport stream.</li>
+ * </ul>
  *
- * <p>What we do instead (ProcessBuilder + SocketAttach):
- *   1. Locate the java binary from java.home (same JDK that's running Spring Boot).
- *   2. Launch the child with ProcessBuilder, binding JDWP explicitly to
- *      127.0.0.1:0 (IPv4, random free port).  Strip noisy env vars.
- *   3. Read the child's stderr until it announces the chosen port.
- *   4. Attach via com.sun.jdi.SocketAttach to 127.0.0.1:<port> — always IPv4,
- *      never subject to dual-stack resolution.
- *   5. From this point the event-loop logic is identical to the old approach.
+ * <h3>What we do instead (ProcessBuilder + SocketAttach)</h3>
+ * <ol>
+ *   <li>Allocate a free port ourselves via ServerSocket(0) before starting
+ *       the child — this gives us a known, non-conflicting port number.</li>
+ *   <li>Start the child with ProcessBuilder, specifying JDWP explicitly:
+ *       {@code server=y,suspend=y,address=127.0.0.1:<port>}.
+ *       Binding to 127.0.0.1 (loopback) prevents external health-checkers
+ *       (e.g. Render's HTTP health probe) from hitting the JDWP port.</li>
+ *   <li>Poll for connection with SocketAttach to 127.0.0.1:<port> — always
+ *       IPv4, never subject to dual-stack resolution or health-check races.</li>
+ *   <li>The event-loop step-tracing logic is unchanged from the original.</li>
+ * </ol>
  *
- * <p>Safety limits:
- *   - MAX_STEPS  — aborts runaway infinite loops.
- *   - SESSION_TIMEOUT_MS — hard wall-clock timeout on the whole session.
+ * <h3>Why polling instead of parsing stderr?</h3>
+ * On different JDK/platform combinations the "Listening for transport"
+ * announcement line uses either bare-port format ({@code 12345}) or
+ * host:port format ({@code 127.0.0.1:12345}).  Because we already know the
+ * port (we allocated it ourselves), parsing stderr is unnecessary and fragile.
+ * Polling with SocketAttach until the child's JDWP agent is ready is simpler
+ * and works identically on all platforms.
+ *
+ * <h3>Safety limits</h3>
+ * <ul>
+ *   <li>MAX_STEPS — aborts runaway infinite loops in user code.</li>
+ *   <li>SESSION_TIMEOUT_MS — hard wall-clock timeout on the whole session.</li>
+ *   <li>ATTACH_TIMEOUT_MS — maximum time to wait for JDWP to start.</li>
+ * </ul>
  */
 public class JdiStepEngine {
 
-    private static final int MAX_STEPS = 5000;
-    private static final long SESSION_TIMEOUT_MS = 15_000;
+    private static final int  MAX_STEPS          = 5000;
+    private static final long SESSION_TIMEOUT_MS  = 15_000;
+    private static final long ATTACH_TIMEOUT_MS   = 10_000;
+    private static final long ATTACH_POLL_INTERVAL = 200;   // ms between attach attempts
 
-    /** Pattern that the JVM prints to stderr when JDWP is ready. */
-    private static final Pattern JDWP_PORT_PATTERN =
-            Pattern.compile("Listening for transport dt_socket at address: (\\d+)");
+    // -------------------------------------------------------------------------
 
     public static class TraceResult {
         public final List<StepSnapshot> steps;
@@ -78,121 +88,137 @@ public class JdiStepEngine {
         public final boolean truncated;
 
         public TraceResult(List<StepSnapshot> steps, String stdout, boolean truncated) {
-            this.steps = steps;
-            this.stdout = stdout;
+            this.steps     = steps;
+            this.stdout    = stdout;
             this.truncated = truncated;
         }
     }
 
-    // -------------------------------------------------------------------------
+    // =========================================================================
     // Public API
-    // -------------------------------------------------------------------------
+    // =========================================================================
 
     public TraceResult trace(Path classOutputDir) throws Exception {
 
         // ------------------------------------------------------------------
-        // Step 1: Launch the child JVM with ProcessBuilder.
+        // Step 1: Allocate a free port BEFORE starting the child JVM.
         //
-        // We use java.home to find the exact same JDK binary that's running
-        // the Spring Boot app — avoids PATH lookup surprises in Docker.
+        // Using ServerSocket(0) lets the OS assign a truly free port.  We
+        // close the socket immediately so the port is available for JDWP to
+        // bind — there is a tiny race window, but in practice this is
+        // negligible because no external process is scanning for free ports.
         //
-        // Key JDWP options:
-        //   transport=dt_socket  — TCP socket (cross-platform, no shared memory)
-        //   server=y             — child listens, parent connects
-        //   suspend=y            — child pauses until debugger attaches
-        //   address=127.0.0.1:0 — bind to IPv4 loopback, OS picks free port
-        //
-        // We remove JDK_JAVA_OPTIONS / JAVA_TOOL_OPTIONS from the child's
-        // environment so that "Picked up JDK_JAVA_OPTIONS: ..." is never
-        // printed to stderr before the JDWP port announcement line.
+        // Binding JDWP to 127.0.0.1:<port> (IPv4 loopback, specific port)
+        // ensures:
+        //   a) only connections originating on this host can reach it, and
+        //   b) we always know the exact port to connect to without parsing
+        //      stderr (whose format varies by JDK version and platform).
         // ------------------------------------------------------------------
+        int jdwpPort = findFreePort();
+
         String javaHome = System.getProperty("java.home");
         String javaBin  = javaHome + File.separator + "bin" + File.separator + "java";
 
+        // ------------------------------------------------------------------
+        // Step 2: Launch the child JVM with ProcessBuilder.
+        //
+        // We strip JDK_JAVA_OPTIONS, JAVA_TOOL_OPTIONS, and _JAVA_OPTIONS
+        // from the child's environment.  These env vars cause the JVM to
+        // print "Picked up ..." noise to stderr which, in previous versions
+        // of this code that relied on parsing stderr, corrupted our output.
+        // We no longer parse stderr for the port, but stripping them still
+        // prevents any unexpected side effects on the child's JVM options.
+        // ------------------------------------------------------------------
         ProcessBuilder pb = new ProcessBuilder(
                 javaBin,
                 "-Djava.net.preferIPv4Stack=true",
-                "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:0",
+                "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y"
+                        + ",address=127.0.0.1:" + jdwpPort,
                 "-cp", classOutputDir.toAbsolutePath().toString(),
                 "Main"
         );
         pb.environment().remove("JDK_JAVA_OPTIONS");
         pb.environment().remove("JAVA_TOOL_OPTIONS");
+        pb.environment().remove("_JAVA_OPTIONS");
 
         Process process = pb.start();
 
-        // ------------------------------------------------------------------
-        // Step 2: Read the JDWP port from child's stderr.
-        //
-        // The JVM prints (to stderr, before the main class runs):
-        //   "Listening for transport dt_socket at address: <PORT>"
-        //
-        // We parse this in a background thread that continues draining stderr
-        // afterwards — stopping mid-read would stall the child when its stderr
-        // pipe buffer fills up.
-        // ------------------------------------------------------------------
+        // Drain stderr and stdout in background threads.
+        // REQUIRED: if we don't actively read these streams the child process
+        // will stall once its pipe buffers fill up.
         StringBuilder stderrCapture = new StringBuilder();
-        int port = readJdwpPort(process.getErrorStream(), stderrCapture);
-        if (port < 0) {
-            process.destroyForcibly();
-            throw new IOException(
-                    "JDWP agent did not announce a port within 10 seconds. " +
-                    "This usually means the child JVM crashed at startup. " +
-                    "stderr:\n" + stderrCapture);
-        }
+        StringBuilder stdoutCapture = new StringBuilder();
+        Thread stderrPump = startStreamPump(process.getErrorStream(), stderrCapture);
+        Thread stdoutPump = startStreamPump(process.getInputStream(), stdoutCapture);
+        stderrPump.setDaemon(true);
+        stdoutPump.setDaemon(true);
+        stderrPump.start();
+        stdoutPump.start();
 
         // ------------------------------------------------------------------
-        // Step 3: Attach to the child via SocketAttach.
+        // Step 3: Attach to the child JVM via SocketAttach (poll until ready).
         //
-        // hostname=127.0.0.1 — explicit IPv4, no dual-stack ambiguity
-        // timeout=5000        — 5-second connect timeout (child is already up)
+        // We poll in a loop rather than doing a single blocking attach()
+        // because the JDWP agent inside the child JVM takes a moment to
+        // initialize and start listening after the process starts.  The
+        // timeout in connArgs is per-attempt; we keep trying until
+        // ATTACH_TIMEOUT_MS has elapsed.
         // ------------------------------------------------------------------
         AttachingConnector socketAttach = findSocketAttachConnector();
         Map<String, Connector.Argument> connArgs = socketAttach.defaultArguments();
         connArgs.get("hostname").setValue("127.0.0.1");
-        connArgs.get("port").setValue(String.valueOf(port));
-        connArgs.get("timeout").setValue("5000");
+        connArgs.get("port").setValue(String.valueOf(jdwpPort));
+        connArgs.get("timeout").setValue("1000"); // 1-second per attempt
 
-        VirtualMachine vm;
-        try {
-            vm = socketAttach.attach(connArgs);
-        } catch (Exception e) {
-            process.destroyForcibly();
-            throw new IOException(
-                    "Failed to attach to child JVM on 127.0.0.1:" + port +
-                    " — " + e.getMessage(), e);
+        VirtualMachine vm        = null;
+        long           deadline  = System.currentTimeMillis() + ATTACH_TIMEOUT_MS;
+
+        while (System.currentTimeMillis() < deadline) {
+            if (!process.isAlive()) {
+                throw new IOException(
+                        "Child JVM exited before JDWP became ready.\n" +
+                        "stderr:\n" + stderrCapture);
+            }
+            try {
+                vm = socketAttach.attach(connArgs);
+                break; // success
+            } catch (IOException attachErr) {
+                // JDWP not ready yet — wait a moment and retry
+                Thread.sleep(ATTACH_POLL_INTERVAL);
+            }
         }
 
-        // Drain child stdout (required — buffer fill-up stalls the child process).
-        StringBuilder stdoutCapture = new StringBuilder();
-        Thread stdoutPump = startStreamPump(process.getInputStream(), stdoutCapture);
-        stdoutPump.setDaemon(true);
-        stdoutPump.start();
+        if (vm == null) {
+            process.destroyForcibly();
+            throw new IOException(
+                    "Could not attach to child JVM at 127.0.0.1:" + jdwpPort +
+                    " within " + (ATTACH_TIMEOUT_MS / 1000) + " seconds.\n" +
+                    "stderr:\n" + stderrCapture);
+        }
 
         // ------------------------------------------------------------------
-        // Step 4: Event loop — identical to the original CommandLineLaunch
-        //         version from this point onwards.
+        // Step 4: Event loop — step through the user's code line by line.
         // ------------------------------------------------------------------
-        List<StepSnapshot> steps = new ArrayList<>();
-        boolean truncated = false;
+        List<StepSnapshot> steps    = new ArrayList<>();
+        boolean            truncated = false;
 
         EventRequestManager erm   = vm.eventRequestManager();
         EventQueue          queue = vm.eventQueue();
 
         // Register a ThreadStartEvent BEFORE vm.resume() so we catch the
-        // very first moment the main thread exists and can install a step
-        // request before any user code runs.
+        // instant the main thread starts and can install the step request
+        // before any user code executes.
         var threadStartRequest = erm.createThreadStartRequest();
         threadStartRequest.setSuspendPolicy(EventRequest.SUSPEND_ALL);
         threadStartRequest.enable();
 
         vm.resume();
 
-        long    deadline             = System.currentTimeMillis() + SESSION_TIMEOUT_MS;
+        long    sessionDeadline      = System.currentTimeMillis() + SESSION_TIMEOUT_MS;
         boolean stepRequestInstalled = false;
 
         eventLoop:
-        while (System.currentTimeMillis() < deadline) {
+        while (System.currentTimeMillis() < sessionDeadline) {
             EventSet eventSet;
             try {
                 eventSet = queue.remove(500);
@@ -220,7 +246,7 @@ public class JdiStepEngine {
 
                 if (event instanceof StepEvent stepEvent) {
                     StepRequest req = (StepRequest) stepEvent.request();
-                    req.disable(); // prevent re-entry during captureSnapshot
+                    req.disable(); // prevent re-entry during snapshot capture
 
                     try {
                         StepSnapshot snapshot = captureSnapshot(stepEvent, steps.size());
@@ -228,7 +254,7 @@ public class JdiStepEngine {
                             steps.add(snapshot);
                         }
                     } catch (Exception ignored) {
-                        // skip this one snapshot, keep tracing
+                        // skip this snapshot; keep tracing
                     }
 
                     if (steps.size() >= MAX_STEPS) {
@@ -255,52 +281,21 @@ public class JdiStepEngine {
         return new TraceResult(steps, stdoutCapture.toString(), truncated);
     }
 
-    // -------------------------------------------------------------------------
+    // =========================================================================
     // Private helpers
-    // -------------------------------------------------------------------------
+    // =========================================================================
 
     /**
-     * Reads the child JVM's stderr stream in a background thread until the
-     * JDWP port announcement line is found, then keeps draining to avoid
-     * blocking the child.
-     *
-     * @param stderrStream  the child process's stderr
-     * @param stderrCapture accumulates stderr text for diagnostic messages
-     * @return the JDWP port number, or -1 if not found within 10 seconds
+     * Allocates a free ephemeral port on the loopback interface.
+     * The socket is closed immediately so JDWP can bind to the same port.
+     * There is a tiny race window between close() and JDWP bind(), but no
+     * external process scans for free loopback ports in practice.
      */
-    private int readJdwpPort(InputStream stderrStream, StringBuilder stderrCapture)
-            throws InterruptedException {
-
-        AtomicInteger foundPort = new AtomicInteger(-1);
-        CountDownLatch portLatch = new CountDownLatch(1);
-
-        Thread reader = new Thread(() -> {
-            try (BufferedReader br =
-                         new BufferedReader(new InputStreamReader(stderrStream))) {
-                String line;
-                boolean portFound = false;
-                while ((line = br.readLine()) != null) {
-                    stderrCapture.append(line).append("\n");
-                    if (!portFound) {
-                        Matcher m = JDWP_PORT_PATTERN.matcher(line);
-                        if (m.find()) {
-                            foundPort.set(Integer.parseInt(m.group(1)));
-                            portLatch.countDown();
-                            portFound = true;
-                            // Don't break — keep draining to prevent pipe stall
-                        }
-                    }
-                }
-            } catch (IOException ignored) {
-            } finally {
-                portLatch.countDown(); // unblock caller if stream closes without match
-            }
-        });
-        reader.setDaemon(true);
-        reader.start();
-
-        portLatch.await(10, TimeUnit.SECONDS);
-        return foundPort.get();
+    private static int findFreePort() throws IOException {
+        try (ServerSocket s = new ServerSocket(0)) {
+            s.setReuseAddress(true);
+            return s.getLocalPort();
+        }
     }
 
     private AttachingConnector findSocketAttachConnector() {
@@ -312,7 +307,7 @@ public class JdiStepEngine {
         throw new IllegalStateException(
                 "No SocketAttach JDI connector found. The JVM running this " +
                 "Spring Boot service must have the jdk.jdi module available — " +
-                "see README for the required --add-modules jdk.jdi JVM flag.");
+                "check that --add-modules jdk.jdi is on the command line.");
     }
 
     private void createStepRequest(EventRequestManager erm, ThreadReference thread) {
@@ -336,7 +331,7 @@ public class JdiStepEngine {
 
             String declaringClass = loc.declaringType().name();
             // Only capture steps inside the user's Solution class — not Main's
-            // own setup code — so the visualizer stays focused on the algorithm.
+            // setup code — so the visualizer stays focused on the algorithm.
             if (!declaringClass.equals("Solution")) {
                 return null;
             }
@@ -354,8 +349,8 @@ public class JdiStepEngine {
 
         } catch (com.sun.jdi.AbsentInformationException
                  | com.sun.jdi.IncompatibleThreadStateException e) {
-            // Rare: no debug info at this exact moment, or thread not suspended.
-            // Skip this snapshot; the trace continues.
+            // Rare: debug info not available at this exact moment, or thread
+            // not actually suspended.  Skip this snapshot; the trace continues.
             return null;
         }
     }
